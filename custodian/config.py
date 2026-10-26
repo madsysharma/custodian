@@ -1,9 +1,9 @@
 """Runtime configuration, loaded from environment variables.
 
-Two providers are supported, and both align with the OpenAI-compatible chat completions format:
+Two providers are supported, and both speak the OpenAI-compatible chat completions format:
 
-* ``meta``: Meta Model API (closed-weight Muse Spark), which is the default.
-* ``baseten``: Muse Spark Open (open weights) served by Baseten, making the project
+* ``meta``: Meta Model API (closed-weight Muse Spark), the default.
+* ``baseten``: Muse Spark Open (open weights) served by Baseten, which makes the project
   eligible for the "Best Build on Meta Open Weight Models" bonus prize.
 """
 
@@ -25,6 +25,25 @@ PROVIDERS = {
         "key_env": "BASETEN_API_KEY",
     },
 }
+
+
+def load_dotenv(path: Path = Path(".env")) -> None:
+    """Load KEY=value lines from a .env file into the environment.
+
+    This works the same on Windows, macOS, and Linux, so no shell-specific setup is needed.
+    Variables that are already set in the environment take priority over the file.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().removeprefix("export ").strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
 
 
 def _bool(value: str | None, default: bool) -> bool:
@@ -51,6 +70,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        load_dotenv()
         provider = os.getenv("GK_PROVIDER", "meta").lower()
         if provider not in PROVIDERS:
             raise ValueError(f"GK_PROVIDER must be one of {sorted(PROVIDERS)}, got {provider!r}")
