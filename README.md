@@ -9,7 +9,7 @@ Bonus categories targeted: **Best Agentic Use-Case** and **Best Build on Meta Op
 
 ## The problem
 
-- During contribution seasons such as GSoC and Hacktoberfest, maintainers receive far more issues than they can read, and many of those issues are duplicates or are missing the details needed to act on them.
+- During open-source contribution events such as GSoC and Hacktoberfest, maintainers receive far more issues than they can read, and many of those issues are duplicates or are missing the details needed to act on them.
 - New contributors often pick up an issue, and then stall because they cannot tell which files matter or how to run the relevant tests.
 - Having experienced both sides of this as an open-source contributor, this is why I chose this particular problem for the "Build for Your World" track.
 
