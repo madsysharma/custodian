@@ -11,7 +11,7 @@ Bonus categories targeted: **Best Agentic Use-Case** and **Best Build on Meta Op
 
 - During open-source contribution events such as GSoC and Hacktoberfest, maintainers receive far more issues than they can read, and many of those issues are duplicates or are missing the details needed to act on them.
 - New contributors often pick up an issue, and then stall because they cannot tell which files matter or how to run the relevant tests.
-- Having experienced both sides of this as an open-source contributor, this is why I chose this particular problem for the "Build for Your World" track.
+- I have experienced both sides of this as an open-source contributor, which is why I chose this particular problem for the "Build for Your World" track.
 
 ## What Custodian does
 
@@ -30,22 +30,23 @@ The agent never has write access to GitHub. Every workflow ends with a structure
 - **Onboarding verification:** each file path the agent mentions is examined against the checkout, and paths that do not exist are removed or marked as unverified.
 - **Action gate:** the only actions that can ever reach GitHub are adding existing labels and posting a comment. Closing, merging, assigning and deleting are impossible. Everything executes as a dry run unless you pass `--apply`, and every comment carries a footer saying it was drafted by an AI.
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for understanding the full design.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
 ## How it uses Meta's models
 
 - **Muse Spark (Meta Model API)** drives the multi-step tool-calling loop for all three workflows.
 - **Image understanding:** screenshots embedded in an issue are sent to Muse Spark alongside the text, so the agent can read error dialogs and broken UI that the reporter never described in words.
-- **Muse Spark Open (open weights, via Baseten):** the same agent runs on the open-weights model by setting `GK_PROVIDER=baseten`, allowing maintainers who cannot send code to a hosted API self-host the whole pipeline. The evaluation compares both providers.
+- **Muse Spark Open (open weights, via GroqCloud):** the same agent runs on the open-weights model by setting `GK_PROVIDER=groq` and `GROQ_API_KEY`. Because the weights are open, maintainers who cannot send code to a closed hosted API can self-host the whole pipeline. The evaluation compares both providers.
+- **Reasoning control:** `GK_REASONING_EFFORT` (`low`, `medium`, `high` or `xhigh`) trades speed for depth, which matters because each workflow makes many model calls.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/madsysharma/custodian && cd custodian
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate        # On Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-cp .env.example .env   # Then fill in MODEL_API_KEY and GITHUB_TOKEN
-set -a && source .env && set +a
+cp .env.example .env             # Then fill in MODEL_API_KEY (or GROQ_API_KEY) and GITHUB_TOKEN
 
 # Dry run: prints the proposed labels and comments without posting anything.
 custodian all --repo OWNER/REPO --issue 123
@@ -53,6 +54,8 @@ custodian all --repo OWNER/REPO --issue 123
 # Post the verified actions to GitHub (use this only on repositories you maintain).
 custodian all --repo OWNER/REPO --issue 123 --apply
 ```
+
+Custodian loads `.env` automatically from the folder you run it in, so no shell-specific setup is needed on Windows, macOS or Linux.
 
 To run automatically on every new issue, start the optional webhook server with `pip install -e ".[server]"` and `uvicorn custodian.server:app`, then point a GitHub webhook for "Issues" events at `/webhook`.
 
