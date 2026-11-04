@@ -1,7 +1,7 @@
 """The three workflows: triage, reproduce, and onboard.
 
-Each workflow follows the same pattern, embodying the core idea of the project:
-the agent explores and proposes, deterministic code verifies and the ActionGate decides
+Each workflow follows the same pattern, which is the core idea of the project:
+the agent explores and proposes, deterministic code verifies, and the ActionGate decides
 what (if anything) reaches GitHub.
 """
 
@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from . import prompts
-from .agent import Agent
+from .agent import Agent, AgentResult
 from .config import Settings
+from .failures import PYTEST_VERIFY_FLAGS, classify
 from .github_client import GitHub, Issue
+from .images import fetch_image_data_url
 from .jsonutil import extract_json
 from .llm import ChatModel
 from .policy import ActionGate
@@ -31,6 +33,7 @@ IMAGE_PATTERNS = [
 ]
 DIFFICULTIES = {"good-first-issue", "intermediate", "advanced"}
 MAX_IMAGES = 4
+MAX_TRIAGE_LABELS = 3
 
 
 @dataclass
@@ -43,6 +46,7 @@ class Context:
     repo_labels: set[str]
     index: IssueIndex
     workspace: RepoWorkspace
+    label_descriptions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,8 +81,16 @@ def build_context(
     number: int,
     include_comments: bool = True,
     workspace_path: Path | None = None,
+    extra_issue_numbers: list[int] | None = None,
 ) -> Context:
+    """Build everything a workflow needs for one issue.
+
+    ``extra_issue_numbers`` adds specific issues to the duplicate-search index. The evaluation
+    uses it so an older original issue is searchable, as it would be in a deployment that
+    indexes a repository's full history rather than only its most recent issues.
+    """
     github = GitHub(repo, settings.github_token)
+    labels = github.list_labels_with_descriptions()
     issue = github.get_issue(number)
     comments = github.get_comments(number) if include_comments else []
     workspace = (
@@ -90,10 +102,32 @@ def build_context(
         github=github,
         issue=issue,
         comments=comments,
-        repo_labels=set(github.list_labels()),
-        index=IssueIndex(load_issue_index(github, settings)),
+        repo_labels=set(labels),
+        index=IssueIndex(_with_extra_issues(github, load_issue_index(github, settings), extra_issue_numbers)),
         workspace=workspace,
+        label_descriptions=labels,
     )
+
+
+def describe_labels(ctx: Context) -> str:
+    """One line per label, with the maintainers' description when there is one."""
+    lines = []
+    for name in sorted(ctx.repo_labels):
+        description = ctx.label_descriptions.get(name, "")
+        lines.append(f"- {name}: {description}" if description else f"- {name}")
+    return "\n".join(lines)
+
+
+def _with_extra_issues(github: GitHub, issues: list[Issue], numbers: list[int] | None) -> list[Issue]:
+    known = {issue.number for issue in issues}
+    extra = []
+    for number in numbers or []:
+        if number not in known:
+            try:
+                extra.append(github.get_issue(number))
+            except Exception:  # a deleted or transferred issue simply stays out of the index
+                continue
+    return issues + extra
 
 
 def image_urls(text: str) -> list[str]:
@@ -119,8 +153,26 @@ def issue_message(ctx: Context, extra: str = "", with_images: bool = True) -> li
     content: list[dict[str, Any]] = [{"type": "text", "text": text}]
     if with_images:
         for url in image_urls(issue.body):
-            content.append({"type": "image_url", "image_url": {"url": url}})
+            data_url = fetch_image_data_url(url, ctx.settings.github_token)
+            if data_url:
+                content.append({"type": "image_url", "image_url": {"url": data_url}})
     return content
+
+
+def run_with_image_fallback(agent: Agent, ctx: Context, extra: str) -> tuple[AgentResult, list[str]]:
+    """Run with screenshots, and retry from the text alone if the provider rejects an image."""
+    message = issue_message(ctx, extra)
+    if len(message) == 1:  # no usable images
+        return agent.run(message), []
+    try:
+        return agent.run(message), []
+    except RuntimeError as error:
+        if "image" not in str(error).lower():
+            raise
+        agent.toolbox.log.clear()
+        return agent.run(issue_message(ctx, extra, with_images=False)), [
+            "The provider could not read the issue's images, so triage used the text only"
+        ]
 
 
 def _gate(ctx: Context, apply: bool) -> ActionGate:
@@ -138,6 +190,9 @@ def verify_triage(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, Any], li
     kept = [label for label in labels if label in ctx.repo_labels]
     if len(kept) != len(labels):
         warnings.append(f"Dropped labels that do not exist: {sorted(set(labels) - set(kept))}")
+    if len(kept) > MAX_TRIAGE_LABELS:
+        warnings.append(f"Kept only the first {MAX_TRIAGE_LABELS} labels: dropped {kept[MAX_TRIAGE_LABELS:]}")
+        kept = kept[:MAX_TRIAGE_LABELS]
 
     difficulty = raw.get("difficulty")
     if difficulty not in DIFFICULTIES:
@@ -189,19 +244,24 @@ def triage(ctx: Context, apply: bool = False) -> WorkflowResult:
     candidates = ctx.index.search(f"{ctx.issue.title} {ctx.issue.body}", k=8, exclude=ctx.issue.number)
     candidate_text = "\n".join(f"#{i.number} [{i.state}] {i.title}" for i, _ in candidates) or "(none)"
     extra = (
-        f"Existing repository labels: {sorted(ctx.repo_labels)}\n\n"
+        "Existing repository labels, with the maintainers' descriptions of when to use each one.\n"
+        "Follow these descriptions closely:\n"
+        f"{describe_labels(ctx)}\n\n"
         f"BM25 duplicate candidates:\n{candidate_text}\n"
     )
     toolbox = Toolbox(repo_tools(ctx.workspace) + issue_tools(ctx.github, ctx.index, ctx.issue.number))
     agent = Agent(ctx.model, toolbox, prompts.TRIAGE, ctx.settings.max_steps)
-    result = agent.run(issue_message(ctx, extra))
+    result, image_warnings = run_with_image_fallback(agent, ctx, extra)
 
     try:
         raw = extract_json(result.final_text)
     except ValueError as error:
-        return WorkflowResult("triage", {}, [f"Could not parse model output: {error}"], [], result.tool_log, result.steps)
+        return WorkflowResult(
+            "triage", {}, image_warnings + [f"Could not parse model output: {error}"], [], result.tool_log, result.steps
+        )
 
     verified, warnings = verify_triage(raw, ctx)
+    warnings = image_warnings + warnings
     gate = _gate(ctx, apply)
     labels = list(verified["labels"])
     if verified["difficulty"] == "good-first-issue" and "good first issue" in ctx.repo_labels:
@@ -215,6 +275,41 @@ def triage(ctx: Context, apply: bool = False) -> WorkflowResult:
 # ---------------------------------------------------------------------------------------
 # Reproduce
 # ---------------------------------------------------------------------------------------
+
+# Output that means the test never ran properly, for pytest and for unittest-style runners
+# such as Django's tests/runtests.py.
+NOT_A_REAL_FAILURE = (
+    "ModuleNotFoundError",
+    "ImportError while importing",
+    "Failed to import test module",
+    "SyntaxError",
+)
+
+
+def test_labels(path: str) -> set[str]:
+    """Ways a command can name a test file: its path, or a dotted module label.
+
+    Django's runner takes labels relative to the tests/ folder, so
+    tests/utils_tests/test_text.py can be run as utils_tests.test_text.
+    """
+    normalized = path.replace("\\", "/").removeprefix("./")
+    module = normalized.removesuffix(".py")
+    labels = {normalized, module.replace("/", ".")}
+    for prefix in ("tests/", "test/"):
+        if module.startswith(prefix):
+            labels.add(module.removeprefix(prefix).replace("/", "."))
+    return labels
+
+
+def runs_test_file(command: str, path: str) -> bool:
+    tokens = command.replace("\\", "/").split()
+    for label in test_labels(path):
+        for token in tokens:
+            # A label may be followed by a class or method, e.g. utils_tests.test_x.SlugifyTests
+            if token == label or token.startswith(label + ".") or token.startswith(label + "::"):
+                return True
+    return False
+
 
 PYTEST_NOT_A_FAILURE = {2: "interrupted or collection error", 4: "usage error", 5: "no tests collected"}
 
@@ -238,7 +333,7 @@ def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, An
     if not path or not ctx.workspace.exists(path):
         warnings.append("Agent claimed a reproduction, but the test file does not exist")
         return verified, warnings
-    if path not in command:
+    if not runs_test_file(command, path):
         warnings.append("The command does not run the agent's test file")
         return verified, warnings
     try:
@@ -247,18 +342,24 @@ def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, An
         warnings.append(f"Command rejected: {error}")
         return verified, warnings
 
-    run = run_command(ctx.workspace.root, command, ctx.settings.allowed_commands, ctx.settings.command_timeout)
     is_pytest = "pytest" in argv
+    # For pytest, force the short summary on so the failure type can always be read.
+    rerun = f"{command} {' '.join(PYTEST_VERIFY_FLAGS)}" if is_pytest else command
+    run = run_command(ctx.workspace.root, rerun, ctx.settings.allowed_commands, ctx.settings.command_timeout)
     if run.timed_out or run.returncode in (0, 127):
         warnings.append(f"Re-run did not show a failure ({'timeout' if run.timed_out else f'exit {run.returncode}'})")
     elif is_pytest and run.returncode in PYTEST_NOT_A_FAILURE:
         warnings.append(f"pytest exit {run.returncode}: {PYTEST_NOT_A_FAILURE[run.returncode]}, not a real failure")
-    elif any(marker in run.output for marker in ("ModuleNotFoundError", "ImportError while importing")):
-        warnings.append("The test fails on an import error, which does not reproduce the bug")
+    elif any(marker in run.output for marker in NOT_A_REAL_FAILURE):
+        warnings.append("The test fails on an import or syntax error, which does not reproduce the bug")
     else:
-        verified["reproduced"] = True
-        verified["failure_excerpt"] = run.output[-1500:]
-        verified["test_code"] = ctx.workspace.resolve(path).read_text()[:4000]
+        verdict = classify(run.output, is_pytest)
+        if verdict.is_assertion_failure:
+            verified["reproduced"] = True
+            verified["failure_excerpt"] = run.output[-1500:]
+            verified["test_code"] = ctx.workspace.resolve(path).read_text()[:4000]
+        else:
+            warnings.append(verdict.reason)
     return verified, warnings
 
 

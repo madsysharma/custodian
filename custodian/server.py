@@ -2,7 +2,7 @@
 
 Run with:  uvicorn custodian.server:app --port 8000
 Requires:  pip install "custodian[server]"
-Actions stay in dry-run mode (saved to .custodian/runs) unless GK_APPLY=1.
+Actions stay in dry-run mode (saved to .custodian/runs) unless CUST_APPLY=1.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def handle_opened_issue(repo: str, number: int) -> None:
     from .workflows import build_context, onboard, triage
 
     settings = Settings.from_env()
-    apply = os.getenv("GK_APPLY") == "1"
+    apply = os.getenv("CUST_APPLY") == "1"
     ctx = build_context(settings, MuseClient(settings), repo, number)
     results = [triage(ctx, apply=apply), onboard(ctx, apply=apply)]
     out = settings.workdir / "runs" / f"{repo.replace('/', '__')}_{number}_{int(time.time())}.json"
@@ -55,5 +55,5 @@ try:
             return {"status": "queued"}
         return {"status": "ignored"}
 
-except ImportError:  # The server extra is optional
+except ImportError:  # the server extra is optional
     app = None

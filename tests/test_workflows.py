@@ -6,7 +6,10 @@ FAILING_TEST = "from demo.mathx import clamp\n\ndef test_upper():\n    assert cl
 PASSING_TEST = "def test_ok():\n    assert True\n"
 
 
-def test_triage_verifies_labels_and_duplicates(make_ctx):
+def test_triage_verifies_labels_and_duplicates(make_ctx, monkeypatch):
+    monkeypatch.setattr(
+        "custodian.workflows.fetch_image_data_url", lambda url, token="": "data:image/png;base64,AAAA"
+    )
     model = ScriptedModel(
         [
             call("grep", pattern="def clamp"),
@@ -36,7 +39,8 @@ def test_triage_verifies_labels_and_duplicates(make_ctx):
     assert all(a["status"] == "proposed" for a in result.actions)  # dry run
     # The screenshot in the issue body is sent to the model as an image part.
     first_user = model.requests[0]["messages"][1]["content"]
-    assert any(part["type"] == "image_url" for part in first_user)
+    images = [part for part in first_user if part["type"] == "image_url"]
+    assert images and images[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_triage_rejects_self_duplicate(make_ctx):
@@ -117,3 +121,15 @@ def test_onboard_removes_hallucinated_paths(make_ctx):
     assert [f["path"] for f in result.verified["files"]] == ["demo/mathx.py"]
     assert "tests/core_test.py (unverified)" in result.verified["overview"]
     assert len(result.warnings) == 2
+
+
+def test_django_style_labels_are_accepted():
+    from custodian.workflows import runs_test_file
+
+    path = "tests/utils_tests/test_custodian_repro.py"
+    assert runs_test_file("python tests/runtests.py utils_tests.test_custodian_repro", path)
+    assert runs_test_file("python tests/runtests.py utils_tests.test_custodian_repro.SlugTests.test_x", path)
+    assert runs_test_file("pytest tests/utils_tests/test_custodian_repro.py -q", path)
+    assert runs_test_file("pytest tests/utils_tests/test_custodian_repro.py::test_x", path)
+    assert not runs_test_file("python tests/runtests.py utils_tests", path)
+    assert not runs_test_file("python tests/runtests.py utils_tests.test_custodian_repro_other", path)

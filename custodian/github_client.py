@@ -57,7 +57,7 @@ class GitHub:
         response.raise_for_status()
         return response.json()
 
-    # ---- Read operations -------------------------------------------------------------
+    # ---- read operations -------------------------------------------------------------
 
     def get_issue(self, number: int) -> Issue:
         return Issue.from_api(self._get(f"/issues/{number}"))
@@ -78,17 +78,39 @@ class GitHub:
             page += 1
         return issues[:max_issues]
 
+    def search_issue_numbers(self, query: str, max_results: int = 100) -> list[int]:
+        """Numbers of this repository's issues matching a GitHub search query."""
+        numbers: list[int] = []
+        page = 1
+        while len(numbers) < max_results:
+            response = self._http.get(
+                "/search/issues",
+                params={"q": f"repo:{self.repo} is:issue {query}", "per_page": 100, "page": page},
+            )
+            response.raise_for_status()
+            items = response.json().get("items", [])
+            if not items:
+                break
+            numbers.extend(item["number"] for item in items if "pull_request" not in item)
+            page += 1
+        return numbers[:max_results]
+
     def list_labels(self) -> list[str]:
-        labels: list[str] = []
+        return list(self.list_labels_with_descriptions())
+
+    def list_labels_with_descriptions(self) -> dict[str, str]:
+        """Label names mapped to the descriptions maintainers wrote for them (may be empty)."""
+        labels: dict[str, str] = {}
         page = 1
         while True:
             data = self._get("/labels", per_page=100, page=page)
             if not data:
                 return labels
-            labels.extend(label["name"] for label in data)
+            for label in data:
+                labels[label["name"]] = (label.get("description") or "").strip()
             page += 1
 
-    # ---- Write operations (call only through ActionGate) -----------------------------
+    # ---- write operations (call only through ActionGate) -----------------------------
 
     def post_comment(self, number: int, body: str) -> str:
         data = self._post(f"/issues/{number}/comments", {"body": body + FOOTER})

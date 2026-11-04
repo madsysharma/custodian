@@ -36,8 +36,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
 - **Muse Spark (Meta Model API)** drives the multi-step tool-calling loop for all three workflows.
 - **Image understanding:** screenshots embedded in an issue are sent to Muse Spark alongside the text, so the agent can read error dialogs and broken UI that the reporter never described in words.
-- **Muse Spark Open (open weights, via GroqCloud):** the same agent runs on the open-weights model by setting `GK_PROVIDER=groq` and `GROQ_API_KEY`. Because the weights are open, maintainers who cannot send code to a closed hosted API can self-host the whole pipeline. The evaluation compares both providers.
-- **Reasoning control:** `GK_REASONING_EFFORT` (`low`, `medium`, `high` or `xhigh`) trades speed for depth, which matters because each workflow makes many model calls.
+- **Muse Spark Open (open weights, via Baseten):** the same agent runs on the open-weights model by setting `GK_PROVIDER=baseten`, allowing maintainers who cannot send code to a hosted API self-host the whole pipeline. The evaluation compares both providers.
 
 ## Quick start
 

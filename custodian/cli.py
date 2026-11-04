@@ -1,10 +1,11 @@
-"""Command-line entry point for Custodian.
+"""Command-line entry point.
 
 Examples:
   custodian triage    --repo owner/name --issue 123
   custodian all       --repo owner/name --issue 123 --apply
-  custodian build-eval --repo owner/name --limit 50
-  custodian eval      --repo owner/name --dataset .custodian/eval/owner__name.jsonl
+  custodian build-eval --repo owner/name --limit 50 --duplicates 10
+  custodian eval       --repo owner/name --dataset .custodian/eval/owner__name.jsonl
+  custodian rescore    --report .custodian/reports/owner__name_fireworks_20261102-181700.json
 """
 
 from __future__ import annotations
@@ -43,21 +44,31 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("build-eval", help="build an evaluation set from closed issues")
     p.add_argument("--repo", required=True)
-    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--limit", type=int, default=50, help="recent labeled closed issues to include")
+    p.add_argument("--duplicates", type=int, default=0, help="also add up to this many known duplicate issues")
 
     p = sub.add_parser("eval", help="score triage (and optionally reproduction) on an evaluation set")
     p.add_argument("--repo", required=True)
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--repro-issues", type=int, nargs="*", help="issue numbers to attempt reproduction on")
-    p.add_argument("--json-out", type=Path)
+    p.add_argument("--json-out", type=Path, help="where to save the full report (default: .custodian/reports/)")
+
+    p = sub.add_parser("rescore", help="recompute scores from a saved report without calling the model")
+    p.add_argument("--report", type=Path, required=True)
 
     args = parser.parse_args(argv)
     settings = Settings.from_env()
 
     if args.command == "build-eval":
         out = settings.workdir / "eval" / f"{args.repo.replace('/', '__')}.jsonl"
-        count = build_dataset_cmd(settings, args.repo, out, args.limit)
-        print(f"Wrote {count} issues to {out}")
+        counts = build_dataset_cmd(settings, args.repo, out, args.limit, args.duplicates)
+        print(f"Wrote {counts['issues']} issues ({counts['duplicates']} known duplicates) to {out}")
+        return 0
+
+    if args.command == "rescore":
+        from .evaluate import rescore
+
+        print(json.dumps(rescore(args.report), indent=2))
         return 0
 
     from .llm import MuseClient
@@ -65,13 +76,18 @@ def main(argv: list[str] | None = None) -> int:
     model = MuseClient(settings)
 
     if args.command == "eval":
-        from .evaluate import run_eval
+        from .evaluate import EvaluationAborted, default_report_path, run_eval, summary
 
-        report = run_eval(settings, model, args.repo, args.dataset, args.repro_issues)
-        summary = {k: v for k, v in report.items() if k != "per_issue"}
-        print(json.dumps(summary, indent=2))
-        if args.json_out:
-            args.json_out.write_text(json.dumps(report, indent=2))
+        try:
+            report = run_eval(settings, model, args.repo, args.dataset, args.repro_issues)
+        except EvaluationAborted as error:
+            print(f"\nStopped: {error}")
+            return 1
+        print(json.dumps(summary(report), indent=2))
+        out = args.json_out or default_report_path(settings, args.repo)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=2))
+        print(f"Full report saved to {out}")
         return 0
 
     from .workflows import WORKFLOWS, build_context
@@ -90,10 +106,10 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def build_dataset_cmd(settings: Settings, repo: str, out: Path, limit: int) -> int:
+def build_dataset_cmd(settings: Settings, repo: str, out: Path, limit: int, duplicates: int) -> dict[str, int]:
     from .evaluate import build_dataset
 
-    return build_dataset(GitHub(repo, settings.github_token), out, limit)
+    return build_dataset(GitHub(repo, settings.github_token), out, limit, duplicates)
 
 
 if __name__ == "__main__":
