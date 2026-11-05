@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dataset", type=Path, required=True)
     p.add_argument("--repro-issues", type=int, nargs="*", help="issue numbers to attempt reproduction on")
     p.add_argument("--json-out", type=Path, help="where to save the full report (default: .custodian/reports/)")
+    p.add_argument("--resume", type=Path, help="continue a stopped run from its saved report")
 
     p = sub.add_parser("rescore", help="recompute scores from a saved report without calling the model")
     p.add_argument("--report", type=Path, required=True)
@@ -78,16 +79,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "eval":
         from .evaluate import EvaluationAborted, default_report_path, run_eval, summary
 
+        resume = json.loads(args.resume.read_text()) if args.resume else None
+        out = args.json_out or args.resume or default_report_path(settings, args.repo)
+        print(f"Progress is saved after every issue to {out}", flush=True)
         try:
-            report = run_eval(settings, model, args.repo, args.dataset, args.repro_issues)
+            report = run_eval(
+                settings, model, args.repo, args.dataset, args.repro_issues, checkpoint=out, resume=resume
+            )
         except EvaluationAborted as error:
             print(f"\nStopped: {error}")
             return 1
+        except KeyboardInterrupt:
+            print(f"\nInterrupted. Continue later with: --resume {out}")
+            return 130
         print(json.dumps(summary(report), indent=2))
-        out = args.json_out or default_report_path(settings, args.repo)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2))
         print(f"Full report saved to {out}")
+        if report["failed"]:
+            print(f"{len(report['failed'])} item(s) failed. Retry just those with: --resume {out}")
         return 0
 
     from .workflows import WORKFLOWS, build_context

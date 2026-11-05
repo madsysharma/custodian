@@ -3,6 +3,7 @@ does not depend on the SDK's response objects (which also makes testing easy).""
 
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -50,14 +51,14 @@ class ChatModel(Protocol):
 class MuseClient:
     """Calls Muse Spark (Meta Model API) or Muse Spark Open (Fireworks) with retries."""
 
-    def __init__(self, settings: Settings, retries: int = 3):
+    def __init__(self, settings: Settings, retries: int | None = None):
         from openai import OpenAI  # imported lazily so tests do not need the SDK
 
         settings.require_api_key()
         self._client = OpenAI(base_url=settings.base_url, api_key=settings.api_key)
         self.model = settings.model
         self.max_tokens = settings.max_tokens
-        self.retries = retries
+        self.retries = retries if retries is not None else settings.max_retries
         self.stream = (
             settings.provider == "fireworks" and settings.max_tokens > FIREWORKS_NON_STREAMING_LIMIT
         )
@@ -94,7 +95,10 @@ class MuseClient:
                 if not _is_retryable(error):
                     # Billing, authentication and bad-request errors will not fix themselves.
                     raise RuntimeError(f"Model call failed: {error}") from error
-                time.sleep(2**attempt)
+                if attempt < self.retries - 1:
+                    delay = retry_delay(error, attempt)
+                    print(f"  provider busy ({_status(error)}), retrying in {delay:.0f}s", flush=True)
+                    time.sleep(delay)
         else:
             raise RuntimeError(
                 f"Model call failed after {self.retries} attempts: {last_error}"
@@ -155,6 +159,30 @@ class MuseClient:
             for index, slot in sorted(partial.items())
         ]
         return ("".join(text) or None), calls, finish_reason
+
+
+MAX_RETRY_DELAY = 60.0
+
+
+def _status(error: Exception) -> str:
+    status = getattr(error, "status_code", None)
+    return f"HTTP {status}" if status else type(error).__name__
+
+
+def retry_delay(error: Exception, attempt: int) -> float:
+    """How long to wait before the next attempt.
+
+    Uses the provider's Retry-After header when it sends one; otherwise waits 2, 4, 8, 16,
+    32, then 60 seconds, with a little randomness so parallel runs do not retry in lockstep.
+    """
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    try:
+        retry_after = float(headers.get("retry-after", ""))
+        return min(max(retry_after, 1.0), MAX_RETRY_DELAY)
+    except (TypeError, ValueError):
+        pass
+    return min(2.0 ** (attempt + 1), MAX_RETRY_DELAY) * random.uniform(0.8, 1.2)
 
 
 def _is_retryable(error: Exception) -> bool:

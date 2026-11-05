@@ -75,6 +75,8 @@ class Settings:
     reasoning_effort: str = ""
     # Output cap per model call, shared by reasoning and the answer.
     max_tokens: int = 8192
+    # Attempts per model call when the provider is busy or rate-limiting (HTTP 429/503).
+    max_retries: int = 6
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -100,6 +102,7 @@ class Settings:
             max_index_issues=int(os.getenv("CUST_MAX_INDEX_ISSUES", "300")),
             reasoning_effort=effort,
             max_tokens=int(os.getenv("CUST_MAX_TOKENS", "8192")),
+            max_retries=max(1, int(os.getenv("CUST_MAX_RETRIES", "6"))),
         )
 
     def require_api_key(self) -> None:

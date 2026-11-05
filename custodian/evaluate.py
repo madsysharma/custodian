@@ -187,14 +187,50 @@ def run_eval(
     repo: str,
     dataset: Path,
     with_reproduction: list[int] | None = None,
+    checkpoint: Path | None = None,
+    resume: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Run the evaluation, saving progress after every issue.
+
+    ``checkpoint`` is rewritten after each issue, so an interrupted run (an outage, a closed
+    laptop, Ctrl+C) keeps everything finished so far. ``resume`` is a saved report: issues it
+    already scored are skipped, and issues that failed in it are tried again.
+    """
     rows = [json.loads(line) for line in dataset.read_text().splitlines() if line.strip()]
     originals = sorted({row["duplicate_of"] for row in rows if row.get("duplicate_of")})
-    per_issue: list[dict[str, Any]] = []
-    repro: list[dict[str, Any]] = []
+    per_issue: list[dict[str, Any]] = list((resume or {}).get("per_issue", []))
+    repro: list[dict[str, Any]] = list((resume or {}).get("per_reproduction", []))
     failed: list[dict[str, Any]] = []
+    done = {item["number"] for item in per_issue}
+    done_repro = {item["number"] for item in repro}
+    if resume:
+        print(f"Resuming: {len(done)} issues and {len(done_repro)} reproductions already scored", flush=True)
+
+    def report() -> dict[str, Any]:
+        return {
+            "run": {
+                "repo": repo,
+                "dataset": str(dataset),
+                "provider": settings.provider,
+                "model": settings.model,
+                "reasoning_effort": settings.reasoning_effort or "provider default",
+                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "issues": len(rows),
+            "failed": failed,
+            **compute_metrics(per_issue, repro),
+            "per_issue": per_issue,
+            "per_reproduction": repro,
+        }
+
+    def save() -> None:
+        if checkpoint:
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint.write_text(json.dumps(report(), indent=2))
 
     for position, row in enumerate(rows, 1):
+        if row["number"] in done:
+            continue
         print(f"[{position}/{len(rows)}] triaging #{row['number']}", flush=True)
         try:
             ctx = build_context(
@@ -203,7 +239,8 @@ def run_eval(
             result = triage(ctx, apply=False)
         except Exception as error:  # one bad issue should not end a long, paid evaluation run
             failed.append({"number": row["number"], "stage": "triage", "error": str(error)[:300]})
-            _stop_if_setup_is_broken(failed)
+            save()
+            _stop_if_setup_is_broken(failed, succeeded=len(per_issue))
             continue
         per_issue.append(
             {
@@ -215,14 +252,18 @@ def run_eval(
                 "steps": result.steps,
             }
         )
+        save()
 
     for number in with_reproduction or []:
+        if number in done_repro:
+            continue
         print(f"reproducing #{number}", flush=True)
         try:
             ctx = build_context(settings, model, repo, number, include_comments=False)
             result = reproduce(ctx, apply=False)
         except Exception as error:
             failed.append({"number": number, "stage": "reproduce", "error": str(error)[:300]})
+            save()
             continue
         repro.append(
             {
@@ -232,22 +273,11 @@ def run_eval(
                 "warnings": result.warnings,
             }
         )
+        save()
 
-    return {
-        "run": {
-            "repo": repo,
-            "dataset": str(dataset),
-            "provider": settings.provider,
-            "model": settings.model,
-            "reasoning_effort": settings.reasoning_effort or "provider default",
-            "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        },
-        "issues": len(rows),
-        "failed": failed,
-        **compute_metrics(per_issue, repro),
-        "per_issue": per_issue,
-        "per_reproduction": repro,
-    }
+    final = report()
+    save()
+    return final
 
 
 SETUP_FAILURE_LIMIT = 3
@@ -257,12 +287,15 @@ class EvaluationAborted(RuntimeError):
     pass
 
 
-def _stop_if_setup_is_broken(failed: list[dict[str, Any]]) -> None:
-    """Stop early when the first issues all fail with the same error.
+def _stop_if_setup_is_broken(failed: list[dict[str, Any]], succeeded: int) -> None:
+    """Stop early when the run has not managed a single issue and the first failures match.
 
-    That pattern means the setup is broken (a missing file, a bad key, a wrong model name),
-    not that individual issues are hard, so continuing would only repeat the same failure.
+    That pattern means the setup is broken (a missing file, a bad key, a wrong model name).
+    Once any issue has succeeded, failures are treated as individual problems instead, and
+    temporary provider errors are handled by the model client's retries.
     """
+    if succeeded:
+        return
     first = failed[:SETUP_FAILURE_LIMIT]
     if len(failed) == SETUP_FAILURE_LIMIT and len({f["error"] for f in first}) == 1:
         raise EvaluationAborted(

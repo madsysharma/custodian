@@ -142,3 +142,98 @@ def test_eval_stops_when_setup_is_broken(tmp_path, monkeypatch):
     with pytest.raises(evaluate.EvaluationAborted, match="list_labels_with_descriptions"):
         evaluate.run_eval(Settings(), model=None, repo="o/r", dataset=dataset)
     assert len(calls) == 3
+
+
+def _rows(tmp_path, numbers):
+    dataset = tmp_path / "d.jsonl"
+    dataset.write_text("\n".join(json.dumps({"number": n, "labels": ["Bug"], "duplicate_of": None}) for n in numbers))
+    return dataset
+
+
+def _fake_triage_result(labels):
+    from custodian.workflows import WorkflowResult
+
+    return WorkflowResult("triage", {"labels": labels, "duplicate_of": None})
+
+
+def test_failures_after_a_success_do_not_stop_the_run(tmp_path, monkeypatch):
+    from custodian import evaluate
+    from custodian.config import Settings
+
+    def context(settings, model, repo, number, **kwargs):
+        if number >= 2:  # the provider becomes overloaded after the first issue
+            raise RuntimeError("Model call failed after 6 attempts: Error code: 503 - service overloaded")
+        return number
+
+    monkeypatch.setattr(evaluate, "build_context", context)
+    monkeypatch.setattr(evaluate, "triage", lambda ctx, apply: _fake_triage_result(["Bug"]))
+    report = evaluate.run_eval(Settings(), None, "o/r", _rows(tmp_path, [1, 2, 3, 4, 5]))
+    assert report["scored_issues"] == 1
+    assert len(report["failed"]) == 4
+
+
+def test_checkpoint_and_resume(tmp_path, monkeypatch):
+    from custodian import evaluate
+    from custodian.config import Settings
+
+    checkpoint = tmp_path / "report.json"
+    seen = []
+
+    def context(settings, model, repo, number, **kwargs):
+        seen.append(number)
+        if number == 3:
+            raise KeyboardInterrupt  # the run is interrupted part-way through
+        return number
+
+    monkeypatch.setattr(evaluate, "build_context", context)
+    monkeypatch.setattr(evaluate, "triage", lambda ctx, apply: _fake_triage_result(["Bug"]))
+    dataset = _rows(tmp_path, [1, 2, 3, 4])
+    try:
+        evaluate.run_eval(Settings(), None, "o/r", dataset, checkpoint=checkpoint)
+    except KeyboardInterrupt:
+        pass
+    saved = json.loads(checkpoint.read_text())
+    assert [i["number"] for i in saved["per_issue"]] == [1, 2]  # progress survived
+
+    seen.clear()
+    monkeypatch.setattr(evaluate, "build_context", lambda settings, model, repo, number, **kw: seen.append(number) or number)
+    final = evaluate.run_eval(Settings(), None, "o/r", dataset, checkpoint=checkpoint, resume=saved)
+    assert seen == [3, 4]  # finished issues were not paid for twice
+    assert final["scored_issues"] == 4
+
+
+def test_retry_delay_respects_retry_after():
+    from types import SimpleNamespace
+
+    from custodian.llm import retry_delay
+
+    busy = SimpleNamespace(status_code=503, response=SimpleNamespace(headers={"retry-after": "7"}))
+    assert retry_delay(busy, attempt=0) == 7
+    plain = SimpleNamespace(status_code=503, response=None)
+    assert 1.6 <= retry_delay(plain, attempt=0) <= 2.4
+    assert retry_delay(plain, attempt=10) <= 72
+
+
+def test_client_keeps_retrying_when_overloaded(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    from custodian import llm
+    from custodian.config import Settings
+
+    class Overloaded(Exception):
+        status_code = 503
+        response = None
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    client = llm.MuseClient(Settings(provider="meta", api_key="k", max_retries=6))
+    attempts = []
+
+    def create(**kwargs):
+        attempts.append(1)
+        if len(attempts) < 5:
+            raise Overloaded("service overloaded")
+        return NS(choices=[NS(finish_reason="stop", message=NS(content="ok", tool_calls=None))])
+
+    client._client.chat.completions.create = create
+    assert client.chat([{"role": "user", "content": "hi"}]).content == "ok"
+    assert len(attempts) == 5
