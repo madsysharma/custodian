@@ -71,11 +71,11 @@ The report includes label precision, recall and F1; recall on true duplicates an
 
 | Metric | Muse Spark 1.3 | Muse Spark Open |
 | --- | --- | --- |
-| Label F1 | 0.605 | _to be filled in_ |
-| Duplicate recall | 0.25 | _to be filled in_ |
-| Duplicate false-alarm rate | 0.0 | _to be filled in_ |
-| Verified reproductions | 2 | _to be filled in_ |
-| Over-claims caught | 0 | _to be filled in_ |
+| Label F1 | 0.605 | 0.565 |
+| Duplicate recall | 0.25 | 0.0 |
+| Duplicate false-alarm rate | 0.0 | 0.2 |
+| Verified reproductions | 2 | 2 |
+| Over-claims caught | 0 | 0 |
 
 ## Built during the hackathon
 
