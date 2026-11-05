@@ -2,8 +2,6 @@
 
 This log records what was built during the Meta Global AI Developer Hackathon building period (October 27 to November 4, 2026). Dates match the commit history.
 
-> **Before publishing:** replace every `[date]` with the date from your commit history, and remove or edit any line that does not match what you actually committed. Run `git log --date=short --pretty="%ad %s"` to see your commits by date.
-
 | Date | What I built |
 | --- | --- |
 | Oct 26 (kickoff) | Chose the project idea, an AI maintainer assistant for open-source repositories, and generated an initial project scaffold with AI assistance. No code was committed before the building period began. |
