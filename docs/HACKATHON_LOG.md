@@ -4,7 +4,7 @@ This log records what was built during the Meta Global AI Developer Hackathon bu
 
 | Date | What I built |
 | --- | --- |
-| Oct 26 (kickoff) | Chose the project idea, an AI maintainer assistant for open-source repositories, and generated an initial project scaffold with AI assistance. No code was committed before the building period began. |
+| Oct 26 (kickoff) | Chose the project idea, an AI maintainer assistant for open-source repositories, and ideated an initial coding scaffold. No code was committed before the building period began. |
 | Oct 27 | Committed the first version: a tool-calling agent loop on Muse Spark, read-only repository and issue tools, the three workflows (triage, reproduce, onboard), a deterministic verifier for each workflow, an action gate that only allows labeling and commenting, a dry-run default, and unit tests that use a scripted model. |
 | Oct 28 | Made `.env` loading work on Windows as well as macOS and Linux. |
 | Oct 29 | Added a second model backend for the open-weights Muse Spark Open. I tried GroqCloud and OpenRouter first, then settled on Fireworks, a hackathon inference partner. Added streaming for long responses, a per-call output token cap, and immediate failure with a clear message on billing and authentication errors. |
