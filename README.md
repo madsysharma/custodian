@@ -64,19 +64,19 @@ To run automatically on every new issue, start the optional webhook server with 
 The evaluation replays the agent on a repository's past, closed issues and compares its output with what the maintainers actually did. Issue comments are hidden from the agent during evaluation, so the maintainers' own replies cannot leak the answer.
 
 ```bash
-custodian build-eval --repo OWNER/REPO --limit 50
-custodian eval --repo OWNER/REPO --dataset .custodian/eval/OWNER__REPO.jsonl --repro-issues 101 102 103
+custodian build-eval --repo OWNER/REPO --limit 10 --duplicates 4
+custodian eval --repo OWNER/REPO --dataset .custodian/eval/OWNER__REPO.jsonl --repro-issues ...
 ```
 
 The report includes label precision, recall and F1; recall on true duplicates and the false-alarm rate on non-duplicates; and, for reproduction, the number of verified reproductions alongside the number of over-claims that verification caught.
 
 | Metric | Muse Spark 1.3 | Muse Spark Open |
 | --- | --- | --- |
-| Label F1 | _to be filled in_ | _to be filled in_ |
-| Duplicate recall | _to be filled in_ | _to be filled in_ |
-| Duplicate false-alarm rate | _to be filled in_ | _to be filled in_ |
-| Verified reproductions | _to be filled in_ | _to be filled in_ |
-| Over-claims caught | _to be filled in_ | _to be filled in_ |
+| Label F1 | 0.605 | _to be filled in_ |
+| Duplicate recall | 0.25 | _to be filled in_ |
+| Duplicate false-alarm rate | 0.0 | _to be filled in_ |
+| Verified reproductions | 2 | _to be filled in_ |
+| Over-claims caught | 0 | _to be filled in_ |
 
 ## Built during the hackathon
 
