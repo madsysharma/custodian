@@ -36,7 +36,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
 
 - **Muse Spark (Meta Model API)** drives the multi-step tool-calling loop for all three workflows.
 - **Image understanding:** screenshots embedded in an issue are sent to Muse Spark alongside the text, so the agent can read error dialogs and broken UI that the reporter never described in words.
-- **Muse Spark Open (open weights, via Baseten):** the same agent runs on the open-weights model by setting `GK_PROVIDER=baseten`, allowing maintainers who cannot send code to a hosted API self-host the whole pipeline. The evaluation compares both providers.
+- **Muse Spark Open (open weights, via Fireworks):** the same agent runs on the open-weights model by setting `CUST_PROVIDER=fireworks`, allowing maintainers who cannot send code to a hosted API self-host the whole pipeline. The evaluation compares both providers.
 
 ## Quick start
 
