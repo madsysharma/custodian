@@ -45,13 +45,13 @@ git clone https://github.com/madsysharma/custodian && cd custodian
 python -m venv .venv
 source .venv/bin/activate        # On Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-cp .env.example .env             # Then fill in MODEL_API_KEY (or GROQ_API_KEY) and GITHUB_TOKEN
+cp .env.example .env             # Then fill in MODEL_API_KEY (or FIREWORKS_API_KEY) and GITHUB_TOKEN
 
 # Dry run: prints the proposed labels and comments without posting anything.
-custodian all --repo OWNER/REPO --issue 123
+custodian all --repo OWNER/REPO --issue ISSUE_NUMBER
 
 # Post the verified actions to GitHub (use this only on repositories you maintain).
-custodian all --repo OWNER/REPO --issue 123 --apply
+custodian all --repo OWNER/REPO --issue ISSUE_NUMBER --apply
 ```
 
 Custodian loads `.env` automatically from the folder you run it in, so no shell-specific setup is needed on Windows, macOS or Linux.
@@ -63,8 +63,8 @@ To run automatically on every new issue, start the optional webhook server with 
 The evaluation replays the agent on a repository's past, closed issues and compares its output with what the maintainers actually did. Issue comments are hidden from the agent during evaluation, so the maintainers' own replies cannot leak the answer.
 
 ```bash
-custodian build-eval --repo OWNER/REPO --limit 10 --duplicates 4
-custodian eval --repo OWNER/REPO --dataset .custodian/eval/OWNER__REPO.jsonl --repro-issues ...
+custodian build-eval --repo OWNER/REPO --limit LIMIT_NUMBER --duplicates NUMBER_OF_DUPLICATES
+custodian eval --repo OWNER/REPO --dataset .custodian/eval/OWNER__REPO.jsonl --repro-issues ISSUE_NUMBER
 ```
 
 The report includes label precision, recall and F1; recall on true duplicates and the false-alarm rate on non-duplicates; and, for reproduction, the number of verified reproductions alongside the number of over-claims that verification caught.
