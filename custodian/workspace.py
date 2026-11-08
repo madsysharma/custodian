@@ -5,7 +5,7 @@ from __future__ import annotations
 import fnmatch
 import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".tox"}
 MAX_FILE_BYTES = 400_000
@@ -21,6 +21,8 @@ class RepoWorkspace:
         self.root = root.resolve()
         if not self.root.is_dir():
             raise WorkspaceError(f"{self.root} is not a directory")
+        # Every file the agent wrote or edited, mapped to its original text (None if it is new).
+        self.modified: dict[str, str | None] = {}
 
     @classmethod
     def clone(cls, repo: str, workdir: Path, refresh: bool = False) -> "RepoWorkspace":
@@ -38,10 +40,29 @@ class RepoWorkspace:
         return cls(target)
 
     def reset(self) -> None:
-        """Discard any files the agent wrote, so every run starts from a clean tree."""
+        """Discard any files the agent wrote or edited, so every run starts from a clean tree."""
         if (self.root / ".git").exists():
             subprocess.run(["git", "checkout", "--", "."], cwd=self.root, capture_output=True)
             subprocess.run(["git", "clean", "-fd"], cwd=self.root, capture_output=True)
+        else:  # not a git checkout (for example in tests): restore from the recorded originals
+            for relative, original in self.modified.items():
+                target = self.root / relative
+                if original is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    target.write_text(original)
+        self.modified.clear()
+
+    @staticmethod
+    def normalize(path: str) -> str:
+        normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        return normalized
+
+    def _record(self, relative: str, target: Path) -> None:
+        if relative not in self.modified:
+            self.modified[relative] = target.read_text() if target.exists() else None
 
     # ---- path safety -----------------------------------------------------------------
 
@@ -111,12 +132,13 @@ class RepoWorkspace:
     # ---- Local write tool (sandbox only, never pushed) --------------------------------
 
     def write_test_file(self, path: str, content: str) -> str:
-        normalized = path.replace("\\", "/").lstrip("./")
+        normalized = self.normalize(path)
         if not TEST_PATH.search(normalized):
             raise WorkspaceError(
                 "The agent may only write test files (e.g. tests/test_x.py or foo.test.ts)."
             )
         target = self.resolve(normalized)
+        self._record(normalized, target)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
         return f"Wrote {normalized} ({len(content.splitlines())} lines)"

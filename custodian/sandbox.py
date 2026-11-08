@@ -1,7 +1,8 @@
 """Run allow-listed test commands inside the repository checkout.
 
-This runs code from the target repository, so treat it as untrusted. For anything beyond
-a local demo, run it inside a container or a Modal Sandbox (see docs/ARCHITECTURE.md).
+This runs code from the target repository, so treat it as untrusted. The local runner here is
+meant for repositories you trust; set CUST_SANDBOX=modal to run tests in a Modal Sandbox
+instead (see custodian/executors.py).
 """
 
 from __future__ import annotations
@@ -51,14 +52,23 @@ def parse_command(command: str, allowed: list[list[str]]) -> list[str]:
     return argv
 
 
+# Environment for every test run, locally and in a Modal Sandbox. A wide virtual terminal
+# stops pytest from cutting its summary lines short (for example "AssertionError" shortened
+# to "As..."), which the verifier relies on.
+TEST_ENV = {"COLUMNS": "400"}
+
+
 def run_command(root: Path, command: str, allowed: list[list[str]], timeout: int) -> RunResult:
     argv = parse_command(command, allowed)
     try:
-        # A wide virtual terminal stops pytest from cutting its summary lines short
-        # (for example "AssertionError" shortened to "As..."), which the verifier relies on.
-        env = {**os.environ, "COLUMNS": "400"}
         proc = subprocess.run(
-            argv, cwd=root, capture_output=True, text=True, timeout=timeout, check=False, env=env
+            argv,
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={**os.environ, **TEST_ENV},
         )
     except subprocess.TimeoutExpired as error:
         partial = (error.stdout or "") if isinstance(error.stdout, str) else ""
@@ -66,6 +76,10 @@ def run_command(root: Path, command: str, allowed: list[list[str]], timeout: int
     except FileNotFoundError:
         return RunResult(command, 127, f"Executable not found: {argv[0]}")
     return RunResult(command, proc.returncode, _tail(proc.stdout + "\n" + proc.stderr))
+
+
+def tail(text: str) -> str:
+    return _tail(text)
 
 
 def _tail(text: str) -> str:

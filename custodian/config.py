@@ -27,6 +27,7 @@ PROVIDERS = {
 }
 
 
+SANDBOXES = ("local", "modal")
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 
 
@@ -77,6 +78,13 @@ class Settings:
     max_tokens: int = 8192
     # Attempts per model call when the provider is busy or rate-limiting (HTTP 429/503).
     max_retries: int = 6
+    # Where reproduction tests run: "local" (this machine) or "modal" (an isolated Modal Sandbox).
+    sandbox: str = "local"
+    # Modal only: commands run once in the sandbox image, from the repository root.
+    sandbox_setup: list[str] = field(default_factory=list)
+    sandbox_python: str = "3.12"
+    # Modal only: allow network access while tests run. Off by default for safety.
+    sandbox_network: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -86,6 +94,9 @@ class Settings:
             raise ValueError(f"CUST_PROVIDER must be one of {sorted(PROVIDERS)}, got {provider!r}")
         defaults = PROVIDERS[provider]
         raw_cmds = os.getenv("CUST_ALLOWED_COMMANDS", "pytest;python -m pytest")
+        sandbox = os.getenv("CUST_SANDBOX", "local").strip().lower()
+        if sandbox not in SANDBOXES:
+            raise ValueError(f"CUST_SANDBOX must be one of {SANDBOXES}, got {sandbox!r}")
         effort = os.getenv("CUST_REASONING_EFFORT", "").strip().lower()
         if effort and effort not in REASONING_EFFORTS:
             raise ValueError(f"CUST_REASONING_EFFORT must be one of {REASONING_EFFORTS}, got {effort!r}")
@@ -103,6 +114,10 @@ class Settings:
             reasoning_effort=effort,
             max_tokens=int(os.getenv("CUST_MAX_TOKENS", "8192")),
             max_retries=max(1, int(os.getenv("CUST_MAX_RETRIES", "6"))),
+            sandbox=sandbox,
+            sandbox_setup=[c.strip() for c in os.getenv("CUST_SANDBOX_SETUP", "").split(";") if c.strip()],
+            sandbox_python=os.getenv("CUST_SANDBOX_PYTHON", "3.12"),
+            sandbox_network=_bool(os.getenv("CUST_SANDBOX_NETWORK"), False),
         )
 
     def require_api_key(self) -> None:

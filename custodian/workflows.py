@@ -16,13 +16,14 @@ from typing import Any
 from . import prompts
 from .agent import Agent, AgentResult
 from .config import Settings
+from .executors import Executor, LocalExecutor, make_executor
 from .failures import PYTEST_VERIFY_FLAGS, classify
 from .github_client import GitHub, Issue
 from .images import fetch_image_data_url
 from .jsonutil import extract_json
 from .llm import ChatModel
 from .policy import ActionGate
-from .sandbox import CommandNotAllowed, parse_command, run_command
+from .sandbox import CommandNotAllowed, parse_command
 from .search import IssueIndex
 from .tools import Toolbox, issue_tools, repo_tools, sandbox_tools
 from .workspace import RepoWorkspace
@@ -47,6 +48,14 @@ class Context:
     index: IssueIndex
     workspace: RepoWorkspace
     label_descriptions: dict[str, str] = field(default_factory=dict)
+    # Where tests run (local or Modal). None means "on this machine", created when first needed.
+    executor: Executor | None = None
+
+
+def get_executor(ctx: Context) -> Executor:
+    if ctx.executor is None:
+        ctx.executor = LocalExecutor(ctx.workspace)
+    return ctx.executor
 
 
 @dataclass
@@ -106,6 +115,7 @@ def build_context(
         index=IssueIndex(_with_extra_issues(github, load_issue_index(github, settings), extra_issue_numbers)),
         workspace=workspace,
         label_descriptions=labels,
+        executor=make_executor(settings, workspace),
     )
 
 
@@ -314,8 +324,11 @@ def runs_test_file(command: str, path: str) -> bool:
 PYTEST_NOT_A_FAILURE = {2: "interrupted or collection error", 4: "usage error", 5: "no tests collected"}
 
 
-def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, Any], list[str]]:
+def verify_reproduction(
+    raw: dict[str, Any], ctx: Context, executor: Executor | None = None
+) -> tuple[dict[str, Any], list[str]]:
     """Independently re-run the agent's test. A reproduction only counts if WE observe it fail."""
+    executor = executor or get_executor(ctx)
     warnings: list[str] = []
     verified = {
         "claimed": bool(raw.get("reproduced")),
@@ -325,6 +338,7 @@ def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, An
         "explanation": str(raw.get("explanation", "")),
         "failure_excerpt": "",
         "test_code": "",
+        "sandbox": executor.name,
     }
     if not verified["claimed"]:
         return verified, warnings
@@ -345,7 +359,7 @@ def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, An
     is_pytest = "pytest" in argv
     # For pytest, force the short summary on so the failure type can always be read.
     rerun = f"{command} {' '.join(PYTEST_VERIFY_FLAGS)}" if is_pytest else command
-    run = run_command(ctx.workspace.root, rerun, ctx.settings.allowed_commands, ctx.settings.command_timeout)
+    run = executor.run(rerun, ctx.settings.allowed_commands, ctx.settings.command_timeout)
     if run.timed_out or run.returncode in (0, 127):
         warnings.append(f"Re-run did not show a failure ({'timeout' if run.timed_out else f'exit {run.returncode}'})")
     elif is_pytest and run.returncode in PYTEST_NOT_A_FAILURE:
@@ -363,32 +377,44 @@ def verify_reproduction(raw: dict[str, Any], ctx: Context) -> tuple[dict[str, An
     return verified, warnings
 
 
-def reproduce(ctx: Context, apply: bool = False) -> WorkflowResult:
-    ctx.workspace.reset()
-    tools, _runs = sandbox_tools(ctx.workspace, ctx.settings.allowed_commands, ctx.settings.command_timeout)
+def _reproduce_in_workspace(
+    ctx: Context, executor: Executor
+) -> tuple[dict[str, Any], list[str], AgentResult]:
+    """Run the reproduction agent and verify its claim, leaving its test in the checkout."""
+    tools, _runs = sandbox_tools(ctx.workspace, executor, ctx.settings.allowed_commands, ctx.settings.command_timeout)
     toolbox = Toolbox(repo_tools(ctx.workspace) + tools)
     allowed = ", ".join(" ".join(c) for c in ctx.settings.allowed_commands)
     agent = Agent(ctx.model, toolbox, prompts.REPRODUCE, ctx.settings.max_steps)
     result = agent.run(issue_message(ctx, f"Allowed test commands start with: {allowed}\n"))
-
     try:
         raw = extract_json(result.final_text)
     except ValueError as error:
-        ctx.workspace.reset()
-        return WorkflowResult("reproduce", {}, [f"Could not parse model output: {error}"], [], result.tool_log, result.steps)
+        return {}, [f"Could not parse model output: {error}"], result
+    verified, warnings = verify_reproduction(raw, ctx, executor)
+    return verified, warnings, result
 
-    verified, warnings = verify_reproduction(raw, ctx)
-    gate = _gate(ctx, apply)
-    if verified["reproduced"]:
-        body = (
-            f"I was able to reproduce this with a minimal failing test.\n\n{verified['explanation']}\n\n"
-            f"<details><summary><code>{verified['test_path']}</code></summary>\n\n"
-            f"```\n{verified['test_code']}\n```\n</details>\n\n"
-            f"Run it with `{verified['command']}`. Key output:\n\n```\n{verified['failure_excerpt'][-800:]}\n```"
-        )
-        gate.propose("post_comment", body=body)
+
+def reproduction_comment(verified: dict[str, Any]) -> str:
+    return (
+        f"I was able to reproduce this with a minimal failing test.\n\n{verified['explanation']}\n\n"
+        f"<details><summary><code>{verified['test_path']}</code></summary>\n\n"
+        f"```\n{verified['test_code']}\n```\n</details>\n\n"
+        f"Run it with `{verified['command']}`. Key output:\n\n```\n{verified['failure_excerpt'][-800:]}\n```"
+    )
+
+
+def reproduce(ctx: Context, apply: bool = False) -> WorkflowResult:
+    executor = get_executor(ctx)
     ctx.workspace.reset()
-    return WorkflowResult("reproduce", verified, warnings, gate.report(), result.tool_log, result.steps)
+    try:
+        verified, warnings, result = _reproduce_in_workspace(ctx, executor)
+        gate = _gate(ctx, apply)
+        if verified.get("reproduced"):
+            gate.propose("post_comment", body=reproduction_comment(verified))
+        return WorkflowResult("reproduce", verified, warnings, gate.report(), result.tool_log, result.steps)
+    finally:
+        ctx.workspace.reset()
+        executor.close()
 
 
 # ---------------------------------------------------------------------------------------

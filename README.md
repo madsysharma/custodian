@@ -79,11 +79,17 @@ The report includes label precision, recall and F1; recall on true duplicates an
 
 ## Built during the hackathon
 
-All code in this repository was written during the hackathon building period (October 27 to November 4, 2026). The day-by-day log is in [docs/HACKATHON_LOG.md](docs/HACKATHON_LOG.md), and the commit history shows the same timeline.
+All code submitted to the hackathon was written during the building period (October 27 to November 4, 2026). The day-by-day log is in [docs/HACKATHON_LOG.md](docs/HACKATHON_LOG.md), and the commit history shows the same timeline. The features in the next section were added after the deadline and are not part of the hackathon submission.
+
+## Added after the hackathon
+
+These implement the stretch goals listed in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+- **Modal Sandboxes:** set `CUST_SANDBOX=modal` to run reproduction tests in an isolated Modal Sandbox with networking blocked, instead of on your machine. Install the extra with `pip install -e ".[modal]"`, run `modal setup` once, and list the commands that install the project in `CUST_SANDBOX_SETUP` (for example `pip install -e .`). They run once while the sandbox image is built, and Modal reuses the image afterwards.
 
 ## Safety notes
 
-- The reproduction sandbox runs code from the target repository. For the demo it runs locally with an allow-list of test commands, no shell and a timeout. For real use it should run inside a container or a Modal Sandbox.
+- The reproduction sandbox runs code from the target repository. By default it runs locally with an allow-list of test commands, no shell and a timeout, which is only appropriate for repositories you trust. For anything else, set `CUST_SANDBOX=modal` so tests run in an isolated Modal Sandbox without network access.
 - Issue text is treated as untrusted input, and the prompts tell the model never to follow instructions found inside an issue. The action gate means that even a successful prompt injection can only produce a labeled comment, never a destructive action.
 - Please only use `--apply` on repositories you maintain or where the maintainers have agreed to try it.
 
@@ -97,6 +103,9 @@ custodian/
   tools.py          read-only repository and issue tools, plus sandbox tools
   workspace.py      safe access to the local checkout
   sandbox.py        allow-listed test runner
+  executors.py      where tests run: locally or in a Modal Sandbox
+  failures.py       tells assertion failures apart from crashes (pytest, unittest)
+  images.py         downloads issue screenshots
   search.py         BM25 index for duplicate candidates
   evaluate.py       offline evaluation on past issues
   llm.py, config.py Muse Spark / Muse Spark Open client and settings

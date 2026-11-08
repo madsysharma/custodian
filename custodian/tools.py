@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .github_client import GitHub
-from .sandbox import RunResult, run_command
+from .sandbox import RunResult
 from .search import IssueIndex
 from .workspace import RepoWorkspace
+
+if TYPE_CHECKING:
+    from .executors import Executor
 
 MAX_TOOL_OUTPUT = 8000
 
@@ -133,11 +136,13 @@ def issue_tools(github: GitHub, index: IssueIndex, current: int) -> list[Tool]:
     ]
 
 
-def sandbox_tools(ws: RepoWorkspace, allowed: list[list[str]], timeout: int) -> tuple[list[Tool], list[RunResult]]:
+def sandbox_tools(
+    ws: RepoWorkspace, executor: "Executor", allowed: list[list[str]], timeout: int
+) -> tuple[list[Tool], list[RunResult]]:
     runs: list[RunResult] = []
 
     def run_tests(command: str) -> str:
-        result = run_command(ws.root, command, allowed, timeout)
+        result = executor.run(command, allowed, timeout)
         runs.append(result)
         return result.summary()
 

@@ -102,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
 
     ctx = build_context(settings, model, args.repo, args.issue, workspace_path=args.workspace)
     names = list(WORKFLOWS) if args.command == "all" else [args.command]
+    if settings.sandbox == "modal":
+        print("Tests run in a Modal Sandbox.")
     if not args.apply:
         print("Dry run: proposed actions are printed, nothing is posted. Use --apply to post.")
     results = []
